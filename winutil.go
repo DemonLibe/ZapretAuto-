@@ -4,8 +4,10 @@ package main
 
 import (
 	"os"
+	"unsafe"
 
 	"golang.org/x/sys/windows"
+	"golang.org/x/sys/windows/registry"
 )
 
 func isAdmin() bool {
@@ -50,4 +52,29 @@ func attachConsole() {
 		os.Stdout, os.Stderr = f, f
 	}
 	_ = windows.SetConsoleOutputCP(65001)
+}
+
+var procMessageBoxTimeout = windows.NewLazySystemDLL("user32.dll").NewProc("MessageBoxTimeoutW")
+
+// notify показывает информационное окно, которое само закрывается через 8 секунд.
+func notify(text string) {
+	t, _ := windows.UTF16PtrFromString("ZapretAuto")
+	m, _ := windows.UTF16PtrFromString(text)
+	const flags = windows.MB_OK | windows.MB_ICONINFORMATION | windows.MB_SETFOREGROUND | windows.MB_TOPMOST
+	if procMessageBoxTimeout.Find() != nil {
+		windows.MessageBox(0, m, t, flags)
+		return
+	}
+	procMessageBoxTimeout.Call(0, uintptr(unsafe.Pointer(m)), uintptr(unsafe.Pointer(t)), flags, 0, 8000)
+}
+
+// installedVersion — версия установленного ZapretAuto (из «Приложений»), "" если не установлен.
+func installedVersion() string {
+	k, err := registry.OpenKey(registry.LOCAL_MACHINE, uninstallKey, registry.QUERY_VALUE)
+	if err != nil {
+		return ""
+	}
+	defer k.Close()
+	v, _, _ := k.GetStringValue("DisplayVersion")
+	return v
 }

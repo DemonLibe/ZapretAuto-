@@ -209,6 +209,11 @@ func (e *Engine) checkUpdate() {
 	e.st.LastCheck = time.Now()
 	defer saveState(e.st)
 
+	// Сначала — обновление самого ZapretAuto.exe (служба перезапустится сама).
+	if selfUpdate() {
+		return
+	}
+
 	latest, err := latestVersion(e.cfg.Repo)
 	if err != nil {
 		logf("проверка обновлений: %v", err)

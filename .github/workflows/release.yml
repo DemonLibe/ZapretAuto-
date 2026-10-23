@@ -27,6 +27,8 @@ jobs:
         run: go test ./...
 
       - name: Build
+        env:
+          VERSION: ${{ inputs.version || github.ref_name }}
         run: |
           ./build.sh
           mkdir -p dist/ZapretAuto

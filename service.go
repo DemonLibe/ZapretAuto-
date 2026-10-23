@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"golang.org/x/sys/windows"
+	"golang.org/x/sys/windows/registry"
 	"golang.org/x/sys/windows/svc"
 	"golang.org/x/sys/windows/svc/mgr"
 )
@@ -136,11 +137,54 @@ func install() error {
 		{Type: mgr.ServiceRestart, Delay: 30 * time.Second},
 		{Type: mgr.ServiceRestart, Delay: 2 * time.Minute},
 	}, 24*60*60)
+	_ = s.SetRecoveryActionsOnNonCrashFailures(true)
+
+	addDefenderExclusion()
+	registerUninstallEntry()
+
 	if err := s.Start(); err != nil {
 		return fmt.Errorf("запуск службы: %w", err)
 	}
-	logf("служба установлена и запущена")
+	logf("служба ZapretAuto %s установлена и запущена", appVersion)
 	return nil
+}
+
+// addDefenderExclusion: Защитник Windows часто удаляет winws.exe/WinDivert как «хакерский инструмент»,
+// из-за чего обход молча перестаёт работать. Исключение — только для папки ZapretAuto.
+func addDefenderExclusion() {
+	if err := runHidden("powershell", "-NoProfile", "-NonInteractive", "-Command",
+		"Add-MpPreference -ExclusionPath '"+dataDir()+"'"); err != nil {
+		logf("исключение Защитника не добавлено (возможно, стоит другой антивирус): %v", err)
+	}
+}
+
+func removeDefenderExclusion() {
+	_ = runHidden("powershell", "-NoProfile", "-NonInteractive", "-Command",
+		"Remove-MpPreference -ExclusionPath '"+dataDir()+"'")
+}
+
+const uninstallKey = `Software\Microsoft\Windows\CurrentVersion\Uninstall\ZapretAuto`
+
+// registerUninstallEntry добавляет ZapretAuto в «Параметры → Приложения»,
+// чтобы удалять его обычной кнопкой «Удалить».
+func registerUninstallEntry() {
+	k, _, err := registry.CreateKey(registry.LOCAL_MACHINE, uninstallKey, registry.SET_VALUE)
+	if err != nil {
+		logf("запись в «Приложения»: %v", err)
+		return
+	}
+	defer k.Close()
+	exe := installedExe()
+	_ = k.SetStringValue("DisplayName", "ZapretAuto — Discord и YouTube без блокировок")
+	_ = k.SetStringValue("DisplayVersion", strings.TrimPrefix(appVersion, "v"))
+	_ = k.SetStringValue("Publisher", "DemonLibe")
+	_ = k.SetStringValue("DisplayIcon", exe)
+	_ = k.SetStringValue("InstallLocation", dataDir())
+	_ = k.SetStringValue("UninstallString", `"`+exe+`" uninstall`)
+	_ = k.SetStringValue("URLInfoAbout", "https://github.com/"+appRepo)
+	_ = k.SetDWordValue("NoModify", 1)
+	_ = k.SetDWordValue("NoRepair", 1)
+	_ = k.SetDWordValue("EstimatedSize", 12*1024)
 }
 
 func importNearby(dir string) {
@@ -180,12 +224,19 @@ func uninstall() error {
 		}
 	}
 	time.Sleep(time.Second)
+	removeDefenderExclusion()
+	_ = registry.DeleteKey(registry.LOCAL_MACHINE, uninstallKey)
 	_ = os.RemoveAll(releasesDir())
-	_ = os.Remove(statePath())
-	// Сам exe может быть запущен прямо сейчас — удаляем его при перезагрузке.
-	if p, err := windows.UTF16PtrFromString(installedExe()); err == nil {
-		if os.Remove(installedExe()) != nil {
-			_ = windows.MoveFileEx(p, nil, windows.MOVEFILE_DELAY_UNTIL_REBOOT)
+	for _, p := range []string{statePath(), configPath(), logPath(), logPath() + ".old",
+		installedExe() + ".old", installedExe() + ".bad", installedExe() + ".new", skipVersionPath()} {
+		_ = os.Remove(p)
+	}
+	// Сам exe может быть запущен прямо сейчас — тогда удаляем его (и папку) при перезагрузке.
+	for _, p := range []string{installedExe(), dataDir()} {
+		if os.Remove(p) != nil {
+			if u, err := windows.UTF16PtrFromString(p); err == nil {
+				_ = windows.MoveFileEx(u, nil, windows.MOVEFILE_DELAY_UNTIL_REBOOT)
+			}
 		}
 	}
 	return nil
@@ -279,6 +330,6 @@ func printStatus() {
 	if cfg.Strategy != "" {
 		strategy = cfg.Strategy + " (задана в config.json)"
 	}
-	fmt.Printf("\nСлужба ZapretAuto: %s\nВерсия zapret:     %s\nСтратегия:         %s\nПоследняя проверка обновлений: %s\nПапка:             %s\n",
-		state, st.Version, strategy, st.LastCheck.Format("2006-01-02 15:04"), dataDir())
+	fmt.Printf("\nZapretAuto %s\nСлужба: %s\nВерсия zapret:     %s\nСтратегия:         %s\nПоследняя проверка обновлений: %s\nПапка:             %s\n",
+		appVersion, state, st.Version, strategy, st.LastCheck.Format("2006-01-02 15:04"), dataDir())
 }

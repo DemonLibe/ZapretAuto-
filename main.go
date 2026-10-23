@@ -34,18 +34,27 @@ func main() {
 	}
 
 	switch cmd {
-	case "", "install":
+	case "":
+		// Повторный двойной клик: если служба уже работает и этот exe не новее установленного,
+		// ничего не трогаем (и не откатываем самообновившуюся версию на старый скачанный файл).
+		if serviceRunning() && compareVersions(strings.TrimPrefix(appVersion, "v"), installedVersion()) <= 0 {
+			notify("Zapret уже работает ✔\n\nНичего делать не нужно — он запускается вместе с Windows и обновляется сам.")
+			return
+		}
+		fallthrough
+	case "install":
 		if !isAdmin() {
 			relaunchElevated(cmd)
 			return
 		}
 		if err := install(); err != nil {
-			messageBox("ZapretAuto", "Не удалось установить:\n\n"+err.Error(), true)
+			messageBox("ZapretAuto", "Не удалось включить:\n\n"+err.Error()+"\n\nПодробности: "+logPath(), true)
 			os.Exit(1)
 		}
 		if cmd == "" {
-			messageBox("ZapretAuto", "Готово. Zapret установлен как служба и будет работать и обновляться сам.\n\n"+
-				"Удалить: запустите ZapretAuto.exe uninstall\nЛог: "+logPath(), false)
+			notify("Zapret включён ✔\n\nЧерез минуту-две Discord и YouTube заработают. Программа запускается вместе с Windows " +
+				"и обновляется сама — про неё можно забыть.\n\nУдалить: Параметры → Приложения → ZapretAuto.\n" +
+				"Скачанный файл можно удалить.")
 		}
 	case "uninstall", "remove":
 		if !isAdmin() {
@@ -56,7 +65,7 @@ func main() {
 			messageBox("ZapretAuto", "Ошибка удаления:\n\n"+err.Error(), true)
 			os.Exit(1)
 		}
-		messageBox("ZapretAuto", "ZapretAuto удалён.", false)
+		notify("ZapretAuto удалён.")
 	case "run", "debug":
 		// Запуск в консоли без службы — для отладки.
 		runConsole()
@@ -66,9 +75,15 @@ func main() {
 	case "select", "autoselect":
 		requireAdminConsole()
 		restartWithAutoselect()
+	case "restart-service":
+		// Служебная команда: перезапуск после самообновления.
+		if err := restartService(); err != nil {
+			logf("перезапуск службы: %v", err)
+		}
 	case "status":
 		printStatus()
 	default:
+		attachConsole()
 		fmt.Println(`ZapretAuto — использование:
   ZapretAuto.exe             установить и запустить (двойной клик)
   ZapretAuto.exe uninstall   остановить и удалить службу
