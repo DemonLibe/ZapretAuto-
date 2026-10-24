@@ -13,6 +13,7 @@ import (
 	"unsafe"
 
 	"golang.org/x/sys/windows"
+	"golang.org/x/sys/windows/svc/mgr"
 )
 
 const createNoWindow = 0x08000000
@@ -32,6 +33,7 @@ type Engine struct {
 	job     windows.Handle
 	exited  chan error
 	reqs    chan request
+	stop    <-chan struct{}
 	started time.Time
 }
 
@@ -41,9 +43,11 @@ func newEngine() *Engine {
 
 // Run работает, пока не закрыт канал stop.
 func (e *Engine) Run(stop <-chan struct{}) {
+	e.stop = stop
 	e.cfg = loadConfig()
 	e.st = loadState()
 	logf("ZapretAuto запущен (версия zapret: %q, стратегия: %q)", e.st.Version, e.st.Strategy)
+	defer unloadWinDivert() // выполняется последним — когда winws.exe уже закрыт
 	defer e.stopWinws()
 	defer e.setStatus("Выключен")
 
@@ -332,6 +336,11 @@ func (e *Engine) autoselect() {
 	// Начинаем с текущей: если она работает идеально, остальные не перебираем.
 	if cur := e.currentStrategy(); cur != "" {
 		for i, n := range names {
+			select {
+			case <-e.stop:
+				return // служба останавливается — не тянем с выключением
+			default:
+			}
 			if n == cur {
 				names = append([]string{cur}, append(names[:i:i], names[i+1:]...)...)
 				break
@@ -449,6 +458,22 @@ func runHidden(name string, args ...string) error {
 	cmd := exec.Command(name, args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: createNoWindow}
 	return cmd.Run()
+}
+
+// unloadWinDivert выгружает драйвер WinDivert после остановки обхода,
+// чтобы после выключения от программы ничего не оставалось в системе.
+func unloadWinDivert() {
+	m, err := mgr.Connect()
+	if err != nil {
+		return
+	}
+	defer m.Disconnect()
+	for _, name := range []string{"WinDivert", "WinDivert14"} {
+		if s, err := m.OpenService(name); err == nil {
+			stopService(s)
+			s.Close()
+		}
+	}
 }
 
 func killStrayWinws() { _ = runHidden("taskkill", "/IM", "winws.exe", "/F") }

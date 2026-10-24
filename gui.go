@@ -104,6 +104,7 @@ func runGUI(hidden bool) {
 					PushButton{Text: "Журнал", OnClicked: openLog},
 					HSpacer{},
 					PushButton{Text: "Удалить…", OnClicked: a.onUninstall},
+					PushButton{Text: "Выход", OnClicked: a.onExit},
 				},
 			},
 		},
@@ -170,11 +171,8 @@ func (a *appWindow) setupTray() {
 	_ = a.trayToggle.SetText("Выключить")
 	a.trayToggle.Triggered().Attach(a.onToggle)
 	quit := walk.NewAction()
-	_ = quit.SetText("Убрать значок (обход продолжит работать)")
-	quit.Triggered().Attach(func() {
-		a.quitting = true
-		a.mw.Close()
-	})
+	_ = quit.SetText("Выход")
+	quit.Triggered().Attach(a.onExit)
 	acts := ni.ContextMenu().Actions()
 	_ = acts.Add(open)
 	_ = acts.Add(a.trayToggle)
@@ -239,7 +237,7 @@ func (a *appWindow) refresh() {
 		a.setStatus("○ Не установлен", colorOff, "Нажмите «Установить», чтобы включить обход блокировок.")
 		a.toggle.SetText("Установить")
 	case info.State == windows.SERVICE_RUNNING && st.Status == "":
-		a.setStatus("● Работает", colorOK, "Discord и YouTube открываются без VPN. Окно можно закрыть — программа останется в трее.")
+		a.setStatus("● Работает", colorOK, "Discord и YouTube открываются. Окно можно закрыть.")
 		a.toggle.SetText("Выключить")
 	case info.State == windows.SERVICE_RUNNING || info.State == windows.SERVICE_START_PENDING:
 		msg := st.Status
@@ -248,7 +246,7 @@ func (a *appWindow) refresh() {
 		}
 		detail := "Это займёт от нескольких секунд до пары минут."
 		if strings.HasPrefix(msg, "Не ") {
-			detail = "Выключите VPN и другие обходы блокировок, проверьте антивирус. Подробности — в журнале."
+			detail = "Выключите VPN и другие обходы, проверьте антивирус."
 		}
 		a.setStatus("◌ "+msg, colorBusy, detail)
 		a.toggle.SetText("Выключить")
@@ -342,6 +340,27 @@ func (a *appWindow) onToggle() {
 			return nil
 		})
 	}
+}
+
+// onExit полностью закрывает программу: выключает обход (служба сама завершает winws.exe
+// и выгружает WinDivert), затем убирает значок из трея и закрывает окно.
+func (a *appWindow) onExit() {
+	a.showWindow()
+	a.runBusy("Выключаю и закрываю…", func() error {
+		if queryService().State != windows.SERVICE_STOPPED {
+			if err := stopServiceUser(); err == errCancelled {
+				return err // отказались от запроса прав — ничего не закрываем
+			} else if err != nil {
+				return fmt.Errorf("не удалось выключить обход: %w", err)
+			}
+			waitState(windows.SERVICE_STOPPED, 30*time.Second)
+		}
+		a.mw.Synchronize(func() {
+			a.quitting = true
+			a.mw.Close()
+		})
+		return nil
+	})
 }
 
 func (a *appWindow) onAutostart() {
