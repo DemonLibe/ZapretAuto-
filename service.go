@@ -6,9 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"golang.org/x/sys/windows"
@@ -141,6 +143,7 @@ func install() error {
 
 	addDefenderExclusion()
 	registerUninstallEntry()
+	askThirdPartyAVExclusion()
 
 	if err := s.Start(); err != nil {
 		return fmt.Errorf("запуск службы: %w", err)
@@ -161,6 +164,54 @@ func addDefenderExclusion() {
 func removeDefenderExclusion() {
 	_ = runHidden("powershell", "-NoProfile", "-NonInteractive", "-Command",
 		"Remove-MpPreference -ExclusionPath '"+dataDir()+"'")
+}
+
+// thirdPartyAV — установленные антивирусы, кроме Защитника Windows (по данным Центра безопасности).
+func thirdPartyAV() []string {
+	cmd := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command",
+		"Get-CimInstance -Namespace root/SecurityCenter2 -ClassName AntiVirusProduct | ForEach-Object { $_.displayName }")
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: createNoWindow}
+	out, err := cmd.Output()
+	if err != nil {
+		return nil
+	}
+	var names []string
+	for _, l := range strings.Split(string(out), "\n") {
+		l = strings.TrimSpace(l)
+		if l != "" && !strings.Contains(strings.ToLower(l), "defender") {
+			names = append(names, l)
+		}
+	}
+	return names
+}
+
+// askThirdPartyAVExclusion: сторонние антивирусы (Касперский, ESET, Dr.Web…) защищают свои настройки
+// от изменения программами, поэтому исключение добавить за пользователя нельзя. Показываем
+// короткую инструкцию один раз при установке — до того, как zapret будет скачан, — и кладём путь в буфер обмена.
+func askThirdPartyAVExclusion() {
+	avs := thirdPartyAV()
+	if len(avs) == 0 {
+		return
+	}
+	logf("найден антивирус: %s", strings.Join(avs, ", "))
+	_ = runHidden("powershell", "-NoProfile", "-NonInteractive", "-Command", "Set-Clipboard -Value '"+dataDir()+"'")
+
+	steps := "Откройте антивирус → Настройки → Исключения → Добавить папку\n" +
+		"и вставьте путь (Ctrl+V)."
+	for _, a := range avs {
+		if strings.Contains(strings.ToLower(a), "kaspersky") || strings.Contains(strings.ToLower(a), "касперск") {
+			steps = "1. Откройте Касперский → ⚙ Настройки → Настройки безопасности.\n" +
+				"2. «Исключения и действия при обнаружении объектов» → «Управлять исключениями».\n" +
+				"3. «Добавить» → в поле «Файл или папка» нажмите Ctrl+V.\n" +
+				"4. Отметьте все компоненты защиты → «Добавить»."
+			break
+		}
+	}
+	messageBox("ZapretAuto — один шаг",
+		"У вас установлен "+strings.Join(avs, ", ")+".\n"+
+			"Он может удалить файлы обхода блокировок, и тогда ничего не заработает.\n\n"+
+			"Добавьте папку в исключения (путь уже скопирован):\n"+dataDir()+"\n\n"+
+			steps+"\n\nПотом нажмите OK.", false)
 }
 
 const uninstallKey = `Software\Microsoft\Windows\CurrentVersion\Uninstall\ZapretAuto`

@@ -48,12 +48,12 @@ func (e *Engine) Run(stop <-chan struct{}) {
 	enableTCPTimestamps()
 
 	// 1. Убедиться, что zapret скачан.
-	for !e.ensureRelease() {
-		logf("zapret ещё не скачан, повтор через 1 минуту")
+	for wait := time.Minute; !e.ensureRelease(); wait = min(wait*2, 30*time.Minute) {
+		logf("zapret ещё не скачан (нет интернета или антивирус удалил winws.exe — добавьте %s в исключения), повтор через %v", dataDir(), wait)
 		select {
 		case <-stop:
 			return
-		case <-time.After(time.Minute):
+		case <-time.After(wait):
 		}
 	}
 
