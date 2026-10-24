@@ -51,6 +51,13 @@ func (handler) Execute(_ []string, r <-chan svc.ChangeRequest, s chan<- svc.Stat
 			eng.reqs <- reqUpdate
 		case ctlSelect:
 			eng.reqs <- reqSelect
+		case ctlAutostartOn, ctlAutostartOff:
+			on := c.Cmd == ctlAutostartOn
+			go func() {
+				if err := setAutostart(on); err != nil {
+					logf("автозапуск: %v", err)
+				}
+			}()
 		}
 	}
 	return false, 0
@@ -96,8 +103,12 @@ func install() error {
 	}
 	defer m.Disconnect()
 
-	// Остановить старую копию, чтобы можно было перезаписать exe.
+	// Остановить старую копию, чтобы можно было перезаписать exe. Её тип запуска сохраняем.
+	startType := uint32(0)
 	if s, err := m.OpenService(serviceName); err == nil {
+		if cfg, err := s.Config(); err == nil {
+			startType = cfg.StartType
+		}
 		stopService(s)
 		_ = s.Delete()
 		s.Close()
@@ -124,12 +135,24 @@ func install() error {
 	importNearby(filepath.Dir(self))
 	loadConfig() // создаёт config.json с настройками по умолчанию
 
+	// Первая установка: автозапуск — только если пользователь согласен.
+	if startType != mgr.StartAutomatic && startType != mgr.StartManual {
+		startType = mgr.StartManual
+		if askYesNo("ZapretAuto",
+			"Запускать ZapretAuto автоматически при включении компьютера?\n\n"+
+				"Да — Discord и YouTube будут работать сразу после включения (рекомендуется).\n"+
+				"Нет — обход будет включаться, только когда вы откроете ZapretAuto и нажмёте «Включить».\n\n"+
+				"Это можно поменять в любой момент в окне программы.") {
+			startType = mgr.StartAutomatic
+		}
+	}
+
 	s, err := m.CreateService(serviceName, installedExe(), mgr.Config{
 		DisplayName:  displayName,
 		Description:  description,
-		StartType:    mgr.StartAutomatic,
+		StartType:    startType,
 		ErrorControl: mgr.ErrorNormal,
-	})
+	}, "service")
 	if err != nil {
 		return fmt.Errorf("создание службы: %w", err)
 	}
@@ -141,9 +164,11 @@ func install() error {
 	}, 24*60*60)
 	_ = s.SetRecoveryActionsOnNonCrashFailures(true)
 
+	allowUsersStartStop(s)
 	recordTCPTimestamps()
 	addDefenderExclusion()
 	registerUninstallEntry()
+	createShortcuts()
 	askThirdPartyAVExclusion()
 
 	if err := s.Start(); err != nil {
@@ -278,6 +303,7 @@ func uninstall() error {
 	time.Sleep(time.Second)
 	removeDefenderExclusion()
 	restoreTCPTimestamps()
+	removeShortcuts()
 	_ = registry.DeleteKey(registry.LOCAL_MACHINE, uninstallKey)
 
 	// Удаляем всю папку: версии zapret, настройки, логи и сам exe.
@@ -401,25 +427,6 @@ func restartWithAutoselect() {
 		return
 	}
 	fmt.Println("Автоподбор стратегии запущен (до пары минут), результат — в", logPath())
-}
-
-func serviceRunning() bool {
-	scm, err := windows.OpenSCManager(nil, nil, windows.SC_MANAGER_CONNECT)
-	if err != nil {
-		return false
-	}
-	defer windows.CloseServiceHandle(scm)
-	name, _ := windows.UTF16PtrFromString(serviceName)
-	h, err := windows.OpenService(scm, name, windows.SERVICE_QUERY_STATUS)
-	if err != nil {
-		return false
-	}
-	defer windows.CloseServiceHandle(h)
-	var st windows.SERVICE_STATUS
-	if windows.QueryServiceStatus(h, &st) != nil {
-		return false
-	}
-	return st.CurrentState == windows.SERVICE_RUNNING
 }
 
 func printStatus() {

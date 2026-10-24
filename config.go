@@ -59,6 +59,7 @@ type State struct {
 	LastCheck   time.Time `json:"last_check"`   // последняя проверка обновлений
 	LastSelect  time.Time `json:"last_select"`  // последний автоподбор
 	PrevVersion string    `json:"prev_version"` // предыдущая версия — для отката
+	Status      string    `json:"status"`       // что служба делает сейчас (для окна программы); "" — работает
 }
 
 func dataDir() string {

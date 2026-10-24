@@ -4,6 +4,7 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -46,9 +47,11 @@ func (e *Engine) Run(stop <-chan struct{}) {
 	defer e.stopWinws()
 
 	enableTCPTimestamps()
+	e.setStatus("Запускается…")
 
 	// 1. Убедиться, что zapret скачан.
 	for wait := time.Minute; !e.ensureRelease(); wait = min(wait*2, 30*time.Minute) {
+		e.setStatus("Не удалось скачать zapret — проверьте интернет или антивирус")
 		logf("zapret ещё не скачан (нет интернета или антивирус удалил winws.exe — добавьте %s в исключения), повтор через %v", dataDir(), wait)
 		select {
 		case <-stop:
@@ -146,6 +149,11 @@ func (e *Engine) restartAfterFailure(crashes int, stop <-chan struct{}) int {
 		wait = 10 * time.Minute
 	}
 	logf("перезапуск #%d через %v", crashes, wait)
+	if crashes >= 3 {
+		e.setStatus("Не получается запустить обход — пробую снова")
+	} else {
+		e.setStatus("Перезапуск после сбоя…")
+	}
 	select {
 	case <-stop:
 		return crashes
@@ -169,6 +177,12 @@ func (e *Engine) alive() bool {
 	}
 }
 
+// setStatus сообщает окну программы, чем служба занята ("" — обход работает).
+func (e *Engine) setStatus(format string, a ...any) {
+	e.st.Status = fmt.Sprintf(format, a...)
+	saveState(e.st)
+}
+
 func (e *Engine) root() string { return releaseDir(e.st.Version) }
 
 // ensureRelease: есть ли рабочая копия zapret; если нет — импорт из соседней папки или скачивание.
@@ -189,6 +203,7 @@ func (e *Engine) ensureRelease() bool {
 			return true
 		}
 	}
+	e.setStatus("Скачиваю zapret…")
 	ver, err := latestVersion(e.cfg.Repo)
 	if err == nil {
 		err = downloadRelease(e.cfg.Repo, ver)
@@ -224,6 +239,9 @@ func (e *Engine) checkUpdate() {
 		return
 	}
 	logf("найдена новая версия %s (текущая %s), скачиваю", latest, e.st.Version)
+	if e.cmd == nil {
+		e.setStatus("Обновляю zapret до %s…", latest)
+	}
 	if err := downloadRelease(e.cfg.Repo, latest); err != nil {
 		logf("обновление не удалось: %v", err)
 		return
@@ -261,6 +279,7 @@ func (e *Engine) startBest() {
 }
 
 func (e *Engine) startCurrent() {
+	defer saveState(e.st)
 	name := e.currentStrategy()
 	if name == "" {
 		name = "general"
@@ -280,6 +299,7 @@ func (e *Engine) autoselect() {
 	e.stopWinws()
 	if !internetUp(e.cfg.ControlTarget) {
 		logf("автоподбор отложен: нет интернета")
+		e.setStatus("")
 		e.startCurrent()
 		return
 	}
@@ -300,7 +320,8 @@ func (e *Engine) autoselect() {
 
 	logf("автоподбор стратегии среди %d вариантов", len(names))
 	best, bestScore := "", -1
-	for _, n := range names {
+	for i, n := range names {
+		e.setStatus("Подбираю настройки под вашего провайдера: %d из %d…", i+1, len(names))
 		if err := e.startWinws(n); err != nil {
 			logf("  %s: не запускается: %v", n, err)
 			continue
@@ -362,6 +383,7 @@ func (e *Engine) startWinws(name string) error {
 	case <-time.After(2 * time.Second):
 	}
 	e.cmd, e.exited, e.started = cmd, exited, time.Now()
+	e.st.Status = "" // сохранится вызывающим кодом или при следующем saveState
 	logf("запущен winws.exe: zapret %s, стратегия %q", e.st.Version, name)
 	return nil
 }

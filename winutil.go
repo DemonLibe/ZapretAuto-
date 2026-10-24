@@ -14,16 +14,11 @@ func isAdmin() bool {
 	return windows.GetCurrentProcessToken().IsElevated()
 }
 
-// relaunchElevated перезапускает exe с тем же аргументом через UAC.
-func relaunchElevated(arg string) {
-	exe, _ := os.Executable()
-	verb, _ := windows.UTF16PtrFromString("runas")
-	file, _ := windows.UTF16PtrFromString(exe)
-	args, _ := windows.UTF16PtrFromString(arg)
-	if err := windows.ShellExecute(0, verb, file, args, nil, windows.SW_HIDE); err != nil {
-		// Пользователь нажал «Нет» в окне UAC — молча выходим.
-		os.Exit(1)
-	}
+func askYesNo(title, text string) bool {
+	t, _ := windows.UTF16PtrFromString(title)
+	m, _ := windows.UTF16PtrFromString(text)
+	r, _ := windows.MessageBox(0, m, t, windows.MB_YESNO|windows.MB_ICONQUESTION|windows.MB_SETFOREGROUND|windows.MB_TOPMOST)
+	return r == 6 // IDYES
 }
 
 func messageBox(title, text string, isError bool) {
