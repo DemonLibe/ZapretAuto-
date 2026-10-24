@@ -141,6 +141,7 @@ func install() error {
 	}, 24*60*60)
 	_ = s.SetRecoveryActionsOnNonCrashFailures(true)
 
+	recordTCPTimestamps()
 	addDefenderExclusion()
 	registerUninstallEntry()
 	askThirdPartyAVExclusion()
@@ -276,21 +277,73 @@ func uninstall() error {
 	}
 	time.Sleep(time.Second)
 	removeDefenderExclusion()
+	restoreTCPTimestamps()
 	_ = registry.DeleteKey(registry.LOCAL_MACHINE, uninstallKey)
-	_ = os.RemoveAll(releasesDir())
-	for _, p := range []string{statePath(), configPath(), logPath(), logPath() + ".old",
-		installedExe() + ".old", installedExe() + ".bad", installedExe() + ".new", skipVersionPath()} {
-		_ = os.Remove(p)
-	}
-	// Сам exe может быть запущен прямо сейчас — тогда удаляем его (и папку) при перезагрузке.
-	for _, p := range []string{installedExe(), dataDir()} {
-		if os.Remove(p) != nil {
+
+	// Удаляем всю папку: версии zapret, настройки, логи и сам exe.
+	_ = os.RemoveAll(dataDir())
+	if _, err := os.Stat(dataDir()); err == nil {
+		// Exe, из которого идёт удаление, сейчас запущен и сам себя стереть не может —
+		// дочищает скрытый cmd после выхода программы (и на всякий случай — при перезагрузке).
+		deleteAfterExit(dataDir())
+		for _, p := range []string{installedExe(), dataDir()} {
 			if u, err := windows.UTF16PtrFromString(p); err == nil {
 				_ = windows.MoveFileEx(u, nil, windows.MOVEFILE_DELAY_UNTIL_REBOOT)
 			}
 		}
 	}
 	return nil
+}
+
+// deleteAfterExit запускает скрытый cmd, который до минуты пытается удалить папку,
+// пока не завершится процесс, держащий в ней файлы.
+func deleteAfterExit(dir string) {
+	script := `/d /c for /l %i in (1,1,60) do @(if exist "` + dir + `" (ping -n 2 127.0.0.1 >nul & rmdir /s /q "` + dir + `" 2>nul))`
+	cmd := exec.Command(os.Getenv("ComSpec"))
+	if cmd.Path == "" {
+		cmd = exec.Command("cmd.exe")
+	}
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		HideWindow:    true,
+		CreationFlags: createNoWindow | 0x00000008, // DETACHED_PROCESS
+		CmdLine:       `cmd.exe ` + script,
+	}
+	cmd.Dir = os.Getenv("SystemRoot")
+	_ = cmd.Start()
+}
+
+// recordTCPTimestamps запоминает (один раз, до первого запуска службы), были ли включены
+// TCP timestamps, чтобы при удалении вернуть как было.
+func recordTCPTimestamps() {
+	k, _, err := registry.CreateKey(registry.LOCAL_MACHINE, uninstallKey, registry.QUERY_VALUE|registry.SET_VALUE)
+	if err != nil {
+		return
+	}
+	defer k.Close()
+	if _, _, err := k.GetStringValue("TcpTimestampsBefore"); err == nil {
+		return
+	}
+	cmd := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command",
+		"(Get-NetTCPSetting -SettingName Internet -ErrorAction SilentlyContinue).Timestamps")
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: createNoWindow}
+	out, err := cmd.Output()
+	v := strings.TrimSpace(string(out))
+	if err != nil || (v != "Enabled" && v != "Disabled") {
+		v = "Unknown"
+	}
+	_ = k.SetStringValue("TcpTimestampsBefore", v)
+}
+
+func restoreTCPTimestamps() {
+	k, err := registry.OpenKey(registry.LOCAL_MACHINE, uninstallKey, registry.QUERY_VALUE)
+	if err != nil {
+		return
+	}
+	v, _, _ := k.GetStringValue("TcpTimestampsBefore")
+	k.Close()
+	if v == "Disabled" {
+		_ = runHidden("netsh", "interface", "tcp", "set", "global", "timestamps=disabled")
+	}
 }
 
 func stopService(s *mgr.Service) {

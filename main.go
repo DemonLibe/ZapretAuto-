@@ -65,7 +65,8 @@ func main() {
 			messageBox("ZapretAuto", "Ошибка удаления:\n\n"+err.Error(), true)
 			os.Exit(1)
 		}
-		notify("ZapretAuto удалён.")
+		notify("ZapretAuto удалён полностью.\n\nЕсли вы добавляли папку в исключения Касперского или другого антивируса, " +
+			"эту запись можно оттуда убрать.")
 	case "run", "debug":
 		// Запуск в консоли без службы — для отладки.
 		runConsole()
