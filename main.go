@@ -61,7 +61,12 @@ func main() {
 				}
 			}
 		}
-		runGUI()
+		runGUI(false)
+	case "tray":
+		// Автозагрузка при входе в Windows: только значок в трее, без окна.
+		if queryService().Installed {
+			runGUI(true)
+		}
 	case "install":
 		requireAdminOrExit()
 		if err := install(); err != nil {
@@ -153,7 +158,7 @@ func isInstalledCopy() bool {
 
 func startDetached(exe string) error {
 	cmd := exec.Command(exe)
-	cmd.Dir = filepath.Dir(exe)
+	cmd.Dir = os.Getenv("SystemRoot") // не держим папку программы рабочей — её можно будет удалить
 	return cmd.Start()
 }
 

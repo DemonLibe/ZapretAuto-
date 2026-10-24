@@ -93,7 +93,7 @@ func selfUpdate() bool {
 		return false
 	}
 	cmd := exec.Command(exe, "restart-service")
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: createNoWindow | 0x00000008 /* DETACHED_PROCESS */}
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: createNoWindow}
 	if err := cmd.Start(); err != nil {
 		logf("самообновление: перезапуск: %v", err)
 		return false

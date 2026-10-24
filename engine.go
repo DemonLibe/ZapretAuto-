@@ -45,13 +45,14 @@ func (e *Engine) Run(stop <-chan struct{}) {
 	e.st = loadState()
 	logf("ZapretAuto запущен (версия zapret: %q, стратегия: %q)", e.st.Version, e.st.Strategy)
 	defer e.stopWinws()
+	defer e.setStatus("Выключен")
 
 	enableTCPTimestamps()
 	e.setStatus("Запускается…")
 
 	// 1. Убедиться, что zapret скачан.
 	for wait := time.Minute; !e.ensureRelease(); wait = min(wait*2, 30*time.Minute) {
-		e.setStatus("Не удалось скачать zapret — проверьте интернет или антивирус")
+		e.setStatus("Не удалось скачать zapret")
 		logf("zapret ещё не скачан (нет интернета или антивирус удалил winws.exe — добавьте %s в исключения), повтор через %v", dataDir(), wait)
 		select {
 		case <-stop:
@@ -65,7 +66,9 @@ func (e *Engine) Run(stop <-chan struct{}) {
 		e.checkUpdate()
 	}
 	if e.cmd == nil {
-		e.startBest()
+		if selected := e.startBest(); !selected && e.cmd != nil {
+			e.verify()
+		}
 	}
 
 	updateTick := time.NewTicker(time.Duration(e.cfg.UpdateIntervalHours) * time.Hour)
@@ -150,7 +153,7 @@ func (e *Engine) restartAfterFailure(crashes int, stop <-chan struct{}) int {
 	}
 	logf("перезапуск #%d через %v", crashes, wait)
 	if crashes >= 3 {
-		e.setStatus("Не получается запустить обход — пробую снова")
+		e.setStatus("Не получается запустить обход")
 	} else {
 		e.setStatus("Перезапуск после сбоя…")
 	}
@@ -270,12 +273,27 @@ func (e *Engine) currentStrategy() string {
 }
 
 // startBest запускает сохранённую стратегию, а если её нет — подбирает.
-func (e *Engine) startBest() {
+// Возвращает true, если был автоподбор (он сам проверяет сайты).
+func (e *Engine) startBest() bool {
 	if e.currentStrategy() == "" && e.cfg.AutoSelect {
+		e.autoselect()
+		return true
+	}
+	e.startCurrent()
+	return false
+}
+
+// verify — проверка после запуска: открываются ли Discord и YouTube. Если нет, а интернет есть, —
+// подбираем стратегию заново. Окно программы прячется в трей, только когда проверка пройдена.
+func (e *Engine) verify() {
+	e.setStatus("Проверяю Discord и YouTube…")
+	ok := score(e.cfg.CheckTargets)
+	logf("проверка после запуска: %d из %d", ok, len(e.cfg.CheckTargets))
+	if ok*2 < len(e.cfg.CheckTargets) && e.cfg.AutoSelect && e.cfg.Strategy == "" && internetUp(e.cfg.ControlTarget) {
 		e.autoselect()
 		return
 	}
-	e.startCurrent()
+	e.setStatus("")
 }
 
 func (e *Engine) startCurrent() {
@@ -291,6 +309,9 @@ func (e *Engine) startCurrent() {
 				logf("запуск general: %v", err)
 			}
 		}
+	}
+	if e.cmd == nil {
+		e.st.Status = "Не получается запустить обход"
 	}
 }
 
@@ -321,7 +342,7 @@ func (e *Engine) autoselect() {
 	logf("автоподбор стратегии среди %d вариантов", len(names))
 	best, bestScore := "", -1
 	for i, n := range names {
-		e.setStatus("Подбираю настройки под вашего провайдера: %d из %d…", i+1, len(names))
+		e.setStatus("Подбираю настройки: %d из %d…", i+1, len(names))
 		if err := e.startWinws(n); err != nil {
 			logf("  %s: не запускается: %v", n, err)
 			continue

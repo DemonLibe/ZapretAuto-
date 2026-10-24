@@ -6,10 +6,12 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
+	"golang.org/x/sys/windows/registry"
 	"golang.org/x/sys/windows/svc"
 	"golang.org/x/sys/windows/svc/mgr"
 )
@@ -167,8 +169,26 @@ func setAutostart(on bool) error {
 	if err := windows.ChangeServiceConfig(h, noChange, startType, noChange, nil, nil, nil, nil, nil, nil, nil); err != nil {
 		return err
 	}
+	setTrayAutorun(on)
 	logf("автозапуск: %v", on)
 	return nil
+}
+
+const runKey = `Software\Microsoft\Windows\CurrentVersion\Run`
+
+// setTrayAutorun: при включённом автозапуске значок ZapretAuto появляется в трее при входе в Windows.
+func setTrayAutorun(on bool) {
+	k, _, err := registry.CreateKey(registry.LOCAL_MACHINE, runKey, registry.SET_VALUE)
+	if err != nil {
+		logf("автозагрузка значка: %v", err)
+		return
+	}
+	defer k.Close()
+	if on {
+		_ = k.SetStringValue("ZapretAuto", `"`+installedExe()+`" tray`)
+	} else {
+		_ = k.DeleteValue("ZapretAuto")
+	}
 }
 
 // Ярлыки в меню «Пуск» и на рабочем столе — чтобы программу было где найти после установки.
@@ -188,7 +208,7 @@ func shortcutPaths() []string {
 func createShortcuts() {
 	for _, p := range shortcutPaths() {
 		script := "$s=(New-Object -ComObject WScript.Shell).CreateShortcut('" + p + "');" +
-			"$s.TargetPath='" + installedExe() + "';$s.WorkingDirectory='" + dataDir() + "';" +
+			"$s.TargetPath='" + installedExe() + "';$s.WorkingDirectory='" + os.Getenv("SystemRoot") + "';" +
 			"$s.IconLocation='" + installedExe() + ",0';$s.Description='Discord и YouTube без блокировок';$s.Save()"
 		if err := runHidden("powershell", "-NoProfile", "-NonInteractive", "-Command", script); err != nil {
 			logf("ярлык %s: %v", p, err)
@@ -252,3 +272,34 @@ const seeMaskNoCloseProcess = 0x00000040
 var procShellExecuteEx = windows.NewLazySystemDLL("shell32.dll").NewProc("ShellExecuteExW")
 
 var errCancelled = errors.New("отменено")
+
+// killInstalledInstances закрывает запущенные копии установленного exe (значок в трее, окно),
+// кроме текущего процесса — чтобы при обновлении и удалении файл не был занят.
+func killInstalledInstances() {
+	snap, err := windows.CreateToolhelp32Snapshot(windows.TH32CS_SNAPPROCESS, 0)
+	if err != nil {
+		return
+	}
+	defer windows.CloseHandle(snap)
+	target := strings.ToLower(filepath.Clean(installedExe()))
+	self := uint32(os.Getpid())
+	var pe windows.ProcessEntry32
+	pe.Size = uint32(unsafe.Sizeof(pe))
+	for err = windows.Process32First(snap, &pe); err == nil; err = windows.Process32Next(snap, &pe) {
+		if pe.ProcessID == self || !strings.EqualFold(windows.UTF16ToString(pe.ExeFile[:]), "ZapretAuto.exe") {
+			continue
+		}
+		h, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION|windows.PROCESS_TERMINATE|windows.SYNCHRONIZE, false, pe.ProcessID)
+		if err != nil {
+			continue
+		}
+		buf := make([]uint16, windows.MAX_PATH)
+		n := uint32(len(buf))
+		if windows.QueryFullProcessImageName(h, 0, &buf[0], &n) == nil &&
+			strings.ToLower(filepath.Clean(windows.UTF16ToString(buf[:n]))) == target {
+			_ = windows.TerminateProcess(h, 0)
+			_, _ = windows.WaitForSingleObject(h, 5000)
+		}
+		windows.CloseHandle(h)
+	}
+}

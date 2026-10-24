@@ -105,10 +105,13 @@ func install() error {
 
 	// Остановить старую копию, чтобы можно было перезаписать exe. Её тип запуска сохраняем.
 	startType := uint32(0)
-	if s, err := m.OpenService(serviceName); err == nil {
-		if cfg, err := s.Config(); err == nil {
-			startType = cfg.StartType
+	if prev := queryService(); prev.Installed {
+		startType = mgr.StartManual
+		if prev.Autostart {
+			startType = mgr.StartAutomatic
 		}
+	}
+	if s, err := m.OpenService(serviceName); err == nil {
 		stopService(s)
 		_ = s.Delete()
 		s.Close()
@@ -125,7 +128,18 @@ func install() error {
 	killStrayWinws()
 
 	if !strings.EqualFold(filepath.Clean(self), filepath.Clean(installedExe())) {
+		// Значок в трее и окно старой версии держат exe — закрываем их, а сам файл
+		// переименовываем (это можно и с занятым файлом) и кладём новый рядом.
+		killInstalledInstances()
+		old := installedExe() + ".old"
+		_ = os.Remove(old)
+		if _, err := os.Stat(installedExe()); err == nil {
+			if err := os.Rename(installedExe(), old); err != nil {
+				return fmt.Errorf("замена exe: %w", err)
+			}
+		}
 		if err := copyFile(self, installedExe()); err != nil {
+			_ = os.Rename(old, installedExe())
 			return fmt.Errorf("копирование exe: %w", err)
 		}
 	}
@@ -165,6 +179,7 @@ func install() error {
 	_ = s.SetRecoveryActionsOnNonCrashFailures(true)
 
 	allowUsersStartStop(s)
+	setTrayAutorun(startType == mgr.StartAutomatic)
 	recordTCPTimestamps()
 	addDefenderExclusion()
 	registerUninstallEntry()
@@ -278,6 +293,22 @@ func importNearby(dir string) {
 }
 
 func uninstall() error {
+	// Рабочая папка процесса не даёт удалить каталог — уходим из него.
+	_ = os.Chdir(os.Getenv("SystemRoot"))
+
+	// Запущенный exe не может удалить сам себя. Если удаление запущено из папки программы
+	// (например, из «Параметры → Приложения»), продолжаем из временной копии — тогда папка
+	// удаляется целиком сразу.
+	if isInstalledCopy() {
+		tmp := filepath.Join(os.TempDir(), "ZapretAuto-uninstall.exe")
+		if err := copyFile(installedExe(), tmp); err == nil {
+			cmd := exec.Command(tmp, "uninstall")
+			cmd.Dir = os.Getenv("SystemRoot")
+			if err := cmd.Start(); err == nil {
+				os.Exit(0)
+			}
+		}
+	}
 	m, err := mgr.Connect()
 	if err != nil {
 		return err
@@ -292,6 +323,9 @@ func uninstall() error {
 		s.Close()
 	}
 	killStrayWinws()
+	// Закрываем значок в трее и открытые окна программы — иначе их exe не удалить.
+	killInstalledInstances()
+	setTrayAutorun(false)
 	// Драйвер WinDivert выгружаем так же, как "Remove Services" в service.bat.
 	for _, name := range []string{"WinDivert", "WinDivert14"} {
 		if s, err := m.OpenService(name); err == nil {
@@ -318,20 +352,29 @@ func uninstall() error {
 			}
 		}
 	}
+	// Временная копия деинсталлятора удалится при следующей перезагрузке.
+	if self, err := os.Executable(); err == nil && !isInstalledCopy() &&
+		strings.EqualFold(filepath.Dir(self), filepath.Clean(os.TempDir())) {
+		if u, err := windows.UTF16PtrFromString(self); err == nil {
+			_ = windows.MoveFileEx(u, nil, windows.MOVEFILE_DELAY_UNTIL_REBOOT)
+		}
+	}
 	return nil
 }
 
-// deleteAfterExit запускает скрытый cmd, который до минуты пытается удалить папку,
+// deleteAfterExit запускает скрытый cmd, который до 10 минут пытается удалить папку,
 // пока не завершится процесс, держащий в ней файлы.
 func deleteAfterExit(dir string) {
-	script := `/d /c for /l %i in (1,1,60) do @(if exist "` + dir + `" (ping -n 2 127.0.0.1 >nul & rmdir /s /q "` + dir + `" 2>nul))`
+	script := `/d /c for /l %i in (1,1,600) do @(if exist "` + dir + `" (ping -n 2 127.0.0.1 >nul & rmdir /s /q "` + dir + `" 2>nul))`
 	cmd := exec.Command(os.Getenv("ComSpec"))
 	if cmd.Path == "" {
 		cmd = exec.Command("cmd.exe")
 	}
 	cmd.SysProcAttr = &syscall.SysProcAttr{
-		HideWindow:    true,
-		CreationFlags: createNoWindow | 0x00000008, // DETACHED_PROCESS
+		HideWindow: true,
+		// Только CREATE_NO_WINDOW: со скрытой консолью cmd запущенный им ping тоже не покажет окно
+		// (с DETACHED_PROCESS каждый ping открывал бы собственную консоль).
+		CreationFlags: createNoWindow,
 		CmdLine:       `cmd.exe ` + script,
 	}
 	cmd.Dir = os.Getenv("SystemRoot")
