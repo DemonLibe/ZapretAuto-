@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Версия релиза (например v1.0.0)"
-        required: true
-        default: "v1.0.0"
+        description: "Версия (можно не заполнять — номер увеличится сам)"
+        required: false
+        default: ""
   push:
     tags: ["v*"]
 
@@ -23,12 +23,39 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Pick version
+        id: ver
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT: ${{ inputs.version }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "push" ]; then
+            TAG="$GITHUB_REF_NAME"
+          elif [ -n "$INPUT" ]; then
+            TAG="$INPUT"
+            case "$TAG" in v*) ;; *) TAG="v$TAG" ;; esac
+          else
+            LAST=$(gh release list --limit 1 --json tagName --jq '.[0].tagName' 2>/dev/null || true)
+            if [ -z "$LAST" ]; then
+              TAG="v1.0.0"
+            else
+              IFS=. read -r MA MI PA <<< "${LAST#v}"
+              TAG="v$MA.$MI.$((PA + 1))"
+            fi
+          fi
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "::error::Релиз $TAG уже есть. Оставьте поле версии пустым — номер выберется сам."
+            exit 1
+          fi
+          echo "Версия: $TAG"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
       - name: Test
         run: go test ./...
 
       - name: Build
         env:
-          VERSION: ${{ inputs.version || github.ref_name }}
+          VERSION: ${{ steps.ver.outputs.tag }}
         run: |
           ./build.sh
           mkdir -p dist/ZapretAuto
@@ -40,7 +67,7 @@ jobs:
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ inputs.version || github.ref_name }}
+          TAG: ${{ steps.ver.outputs.tag }}
         run: |
           gh release create "$TAG" ZapretAuto.exe dist/ZapretAuto.zip \
             --target "$GITHUB_SHA" \
