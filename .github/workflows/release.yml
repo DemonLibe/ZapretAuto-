@@ -9,9 +9,24 @@ on:
         default: ""
   push:
     tags: ["v*"]
+    # Любое изменение кода в main сразу выпускается новым релизом, а установленные
+    # программы находят его и обновляются сами. Правки README и т.п. релиз не выпускают.
+    branches: [main]
+    paths:
+      - "**.go"
+      - "go.mod"
+      - "go.sum"
+      - "winres/**"
+      - "build.sh"
+      - ".github/workflows/release.yml"
 
 permissions:
   contents: write
+
+# Несколько пушей подряд выпускаются по очереди, чтобы номера версий не пересекались.
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 jobs:
   release:
@@ -29,7 +44,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           INPUT: ${{ inputs.version }}
         run: |
-          if [ "$GITHUB_EVENT_NAME" = "push" ]; then
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
             TAG="$GITHUB_REF_NAME"
           elif [ -n "$INPUT" ]; then
             TAG="$INPUT"

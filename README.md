@@ -110,5 +110,7 @@ C:\ProgramData\ZapretAuto\ZapretAuto.exe uninstall
 
 Лог: `C:\ProgramData\ZapretAuto\zapretauto.log`.
 
-Сборка: `VERSION=v1.0.0 ./build.sh`. Иконка, манифест и сведения о версии лежат в `winres/` и вшиваются через [go-winres](https://github.com/tc-hib/go-winres). Релиз: **Actions → Release → Run workflow**.
+Сборка: `VERSION=v1.0.0 ./build.sh`. Иконка, манифест и сведения о версии лежат в `winres/` и вшиваются через [go-winres](https://github.com/tc-hib/go-winres). Релиз выпускается автоматически при каждом изменении кода в `main`: номер версии повышается сам, тесты прогоняются до публикации.
+Установленные программы находят новый релиз при запуске, при открытии окна и каждые 6 часов, после чего обновляются сами.
+Если новая версия не запустится, программа вернётся на прежнюю. Вручную релиз можно выпустить так: **Actions → Release → Run workflow**.
 </details>
