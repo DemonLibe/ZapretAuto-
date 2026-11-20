@@ -63,8 +63,21 @@ func latestVersion(repo string) (string, error) {
 	return "", errors.New(strings.Join(errs, "; "))
 }
 
+// Номер версии — крошечный ответ: долго не ждём, чтобы без интернета проверка не висела минутами.
+var versionClient = &http.Client{Timeout: 15 * time.Second}
+
 func fetchVersionFile(url string) (string, error) {
-	resp, err := httpGet(url)
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("User-Agent", "ZapretAuto")
+	req.Header.Set("Cache-Control", "no-cache")
+	resp, err := versionClient.Do(req)
+	if err == nil && resp.StatusCode != 200 {
+		resp.Body.Close()
+		err = fmt.Errorf("%s: HTTP %d", url, resp.StatusCode)
+	}
 	if err != nil {
 		return "", err
 	}
@@ -83,7 +96,7 @@ func fetchVersionFile(url string) (string, error) {
 // latestReleaseTag — тег последнего релиза по редиректу /releases/latest (без GitHub API и его лимитов).
 func latestReleaseTag(repo string) (string, error) {
 	c := &http.Client{
-		Timeout: 30 * time.Second,
+		Timeout: 15 * time.Second,
 		CheckRedirect: func(r *http.Request, via []*http.Request) error {
 			if strings.Contains(r.URL.Path, "/releases/tag/") || len(via) > 5 {
 				return http.ErrUseLastResponse

@@ -73,14 +73,17 @@ func (e *Engine) Run(stop <-chan struct{}) {
 		}
 	}
 
-	// 2. Обновиться, если пора, затем запустить обход.
-	if e.updateDue() {
-		e.checkUpdate()
-	}
+	// 2. Сначала запускаем обход — Discord и YouTube заработают без задержки.
 	if e.cmd == nil {
 		if selected := e.startBest(); !selected && e.cmd != nil {
 			e.verify()
 		}
+	}
+
+	// 3. При каждом запуске проверяем обновления (если только что не проверяли,
+	// например сразу после первой установки). Обновление само перезапустит обход.
+	if time.Now().Round(0).Sub(e.st.LastCheck.Round(0)) > 10*time.Minute {
+		e.checkUpdate()
 	}
 
 	// Раз в 15 минут смотрим, не пора ли проверить обновления. Сам интервал считаем по часам

@@ -133,6 +133,13 @@ func runGUI(hidden bool) {
 	})
 
 	a.refresh()
+	// Открыли окно — сразу проверяем обновления, если давно не проверяли.
+	// При автозагрузке (hidden) это делает сама служба при старте.
+	if !hidden {
+		if st := loadState(); time.Since(st.LastCheck) > 10*time.Minute && requestUpdateCheck() == nil {
+			a.updates.SetText("Обновления: проверяю…")
+		}
+	}
 	stop := make(chan struct{})
 	go func() {
 		t := time.NewTicker(1500 * time.Millisecond)
