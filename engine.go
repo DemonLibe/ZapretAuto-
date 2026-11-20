@@ -237,7 +237,7 @@ func (e *Engine) ensureRelease() bool {
 	logf("скачан zapret %s", ver)
 	e.st.Version = ver
 	e.st.LastCheck, e.st.CheckOK = time.Now().Round(0), true
-	e.st.CheckResult = "установлена последняя версия zapret " + ver
+	e.st.CheckResult = "всё актуально"
 	saveState(e.st)
 	return true
 }
@@ -262,12 +262,12 @@ func (e *Engine) checkUpdate() {
 	latest, err := latestVersion(e.cfg.Repo)
 	if err != nil {
 		logf("проверка обновлений: %v", err)
-		e.st.CheckResult = "не удалось проверить — повторю через 15 минут"
+		e.st.CheckResult = "не удалось, повторю через 15 мин"
 		return
 	}
 	if compareVersions(latest, e.st.Version) <= 0 {
 		logf("проверка обновлений: установлена последняя версия %s", e.st.Version)
-		e.st.CheckOK, e.st.CheckResult = true, "установлена последняя версия zapret "+e.st.Version
+		e.st.CheckOK, e.st.CheckResult = true, "всё актуально"
 		return
 	}
 	logf("найдена новая версия %s (текущая %s), скачиваю", latest, e.st.Version)
@@ -276,7 +276,7 @@ func (e *Engine) checkUpdate() {
 	}
 	if err := downloadRelease(e.cfg.Repo, latest); err != nil {
 		logf("обновление не удалось: %v", err)
-		e.st.CheckResult = "вышла версия " + latest + ", но скачать не удалось — повторю через 15 минут"
+		e.st.CheckResult = "не удалось скачать " + latest + ", повторю"
 		return
 	}
 	migrateUserFiles(e.root(), releaseDir(latest))
@@ -293,7 +293,7 @@ func (e *Engine) checkUpdate() {
 		e.startCurrent()
 	}
 	logf("обновлено до %s", latest)
-	e.st.CheckOK, e.st.CheckResult = true, "обновлено до zapret "+latest
+	e.st.CheckOK, e.st.CheckResult = true, "zapret обновлён до "+latest
 }
 
 func (e *Engine) currentStrategy() string {

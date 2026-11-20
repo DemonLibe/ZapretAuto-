@@ -137,7 +137,7 @@ func runGUI(hidden bool) {
 	// При автозагрузке (hidden) это делает сама служба при старте.
 	if !hidden {
 		if st := loadState(); time.Since(st.LastCheck) > 10*time.Minute && requestUpdateCheck() == nil {
-			a.updates.SetText("Обновления: проверяю…")
+			a.updates.SetText("Проверяю обновления…")
 		}
 	}
 	stop := make(chan struct{})
@@ -307,7 +307,7 @@ func (a *appWindow) refresh() {
 // updatesLine — когда проверялись обновления и что нашли.
 func updatesLine(st State) string {
 	if st.LastCheck.IsZero() {
-		return "Обновления: ещё не проверялись"
+		return "Обновления ещё не проверялись"
 	}
 	t := st.LastCheck.Local()
 	now := time.Now()
@@ -318,10 +318,15 @@ func updatesLine(st State) string {
 	case t.YearDay() == now.AddDate(0, 0, -1).YearDay() && t.Year() == now.AddDate(0, 0, -1).Year():
 		when = t.Format("вчера в 15:04")
 	}
-	if st.CheckResult == "" {
-		return "Обновления: проверено " + when
+	switch st.CheckResult {
+	case "":
+		return "Обновления проверены " + when
+	case "проверяю…":
+		return "Проверяю обновления…"
+	case "обновляю программу…":
+		return "Обновляю программу…"
 	}
-	return "Обновления: проверено " + when + " — " + st.CheckResult
+	return "Обновления проверены " + when + ": " + st.CheckResult
 }
 
 func (a *appWindow) onCheckUpdates() {
@@ -329,7 +334,7 @@ func (a *appWindow) onCheckUpdates() {
 		walk.MsgBox(a.mw, "ZapretAuto", err.Error(), walk.MsgBoxIconInformation)
 		return
 	}
-	a.updates.SetText("Обновления: проверяю…")
+	a.updates.SetText("Проверяю обновления…")
 }
 
 func (a *appWindow) setStatus(text string, color walk.Color, detail string) {

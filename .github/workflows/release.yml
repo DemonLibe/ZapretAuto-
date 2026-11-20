@@ -18,6 +18,7 @@ on:
       - "go.sum"
       - "winres/**"
       - "build.sh"
+      - "CHANGELOG.md"
       - ".github/workflows/release.yml"
 
 permissions:
@@ -33,6 +34,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # нужна история и теги — для списка изменений
 
       - uses: actions/setup-go@v5
         with:
@@ -82,6 +85,28 @@ jobs:
           (cd dist && zip -qr ZapretAuto.zip ZapretAuto)
           sha256sum ZapretAuto.exe dist/ZapretAuto.zip
 
+      - name: Release notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.ver.outputs.tag }}
+        run: |
+          # Раздел этой версии из CHANGELOG.md («## v1.0.10 · …»), иначе — заголовки коммитов с прошлого релиза.
+          NOTES=$(awk -v t="$TAG" '/^## /{if(f)exit; f=($2==t); next} f' CHANGELOG.md)
+          if [ -z "$(echo "$NOTES" | tr -d '[:space:]')" ]; then
+            PREV=$(gh release list --limit 1 --json tagName --jq '.[0].tagName' 2>/dev/null || true)
+            if [ -n "$PREV" ] && git rev-parse -q --verify "refs/tags/$PREV" >/dev/null; then
+              NOTES=$(git log --no-merges --pretty='- %s' "$PREV..HEAD")
+            fi
+          fi
+          {
+            cat .github/release-notes.md
+            if [ -n "$NOTES" ]; then
+              printf '\n## Что нового в %s\n\n' "$TAG"
+              echo "$NOTES"
+            fi
+          } > dist/notes.md
+          cat dist/notes.md
+
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -90,4 +115,4 @@ jobs:
           gh release create "$TAG" ZapretAuto.exe dist/ZapretAuto.zip \
             --target "$GITHUB_SHA" \
             --title "ZapretAuto $TAG" \
-            --notes-file .github/release-notes.md
+            --notes-file dist/notes.md
