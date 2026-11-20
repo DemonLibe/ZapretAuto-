@@ -28,6 +28,7 @@ type appWindow struct {
 	status    *walk.Label
 	detail    *walk.TextLabel
 	info      *walk.Label
+	updates   *walk.TextLabel
 	toggle    *walk.PushButton
 	autostart *walk.CheckBox
 	busy      bool
@@ -71,9 +72,9 @@ func runGUI(hidden bool) {
 		Title:    windowTitle,
 		Icon:     smallIcon,
 		Visible:  !hidden,
-		Size:     Size{Width: 460, Height: 330},
-		MinSize:  Size{Width: 460, Height: 330},
-		MaxSize:  Size{Width: 460, Height: 330},
+		Size:     Size{Width: 460, Height: 370},
+		MinSize:  Size{Width: 460, Height: 370},
+		MaxSize:  Size{Width: 460, Height: 370},
 		Font:     Font{Family: "Segoe UI", PointSize: 10},
 		Layout:   VBox{Margins: Margins{Left: 20, Top: 18, Right: 20, Bottom: 14}, Spacing: 8},
 		Children: []Widget{
@@ -95,6 +96,7 @@ func runGUI(hidden bool) {
 			Label{AssignTo: &a.status, Font: Font{Family: "Segoe UI", PointSize: 13, Bold: true}},
 			TextLabel{AssignTo: &a.detail, MinSize: Size{Height: 34}},
 			Label{AssignTo: &a.info, TextColor: colorMuted},
+			TextLabel{AssignTo: &a.updates, TextColor: colorMuted, MinSize: Size{Height: 34}},
 			VSpacer{},
 			PushButton{AssignTo: &a.toggle, MinSize: Size{Height: 38}, OnClicked: a.onToggle},
 			CheckBox{AssignTo: &a.autostart, Alignment: AlignHNearVCenter, Text: "Запускать при включении компьютера", OnClicked: a.onAutostart},
@@ -102,6 +104,7 @@ func runGUI(hidden bool) {
 				Layout: HBox{MarginsZero: true},
 				Children: []Widget{
 					PushButton{Text: "Журнал", OnClicked: openLog},
+					PushButton{Text: "Обновить", OnClicked: a.onCheckUpdates},
 					HSpacer{},
 					PushButton{Text: "Удалить…", OnClicked: a.onUninstall},
 					PushButton{Text: "Выход", OnClicked: a.onExit},
@@ -291,6 +294,35 @@ func (a *appWindow) refresh() {
 	}
 	parts = append(parts, "программа "+strings.TrimPrefix(appVersion, "v"))
 	a.info.SetText(strings.Join(parts, "  ·  "))
+	a.updates.SetText(updatesLine(st))
+}
+
+// updatesLine — когда проверялись обновления и что нашли.
+func updatesLine(st State) string {
+	if st.LastCheck.IsZero() {
+		return "Обновления: ещё не проверялись"
+	}
+	t := st.LastCheck.Local()
+	now := time.Now()
+	when := t.Format("02.01 в 15:04")
+	switch {
+	case t.YearDay() == now.YearDay() && t.Year() == now.Year():
+		when = t.Format("сегодня в 15:04")
+	case t.YearDay() == now.AddDate(0, 0, -1).YearDay() && t.Year() == now.AddDate(0, 0, -1).Year():
+		when = t.Format("вчера в 15:04")
+	}
+	if st.CheckResult == "" {
+		return "Обновления: проверено " + when
+	}
+	return "Обновления: проверено " + when + " — " + st.CheckResult
+}
+
+func (a *appWindow) onCheckUpdates() {
+	if err := requestUpdateCheck(); err != nil {
+		walk.MsgBox(a.mw, "ZapretAuto", err.Error(), walk.MsgBoxIconInformation)
+		return
+	}
+	a.updates.SetText("Обновления: проверяю…")
 }
 
 func (a *appWindow) setStatus(text string, color walk.Color, detail string) {

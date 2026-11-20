@@ -6,7 +6,6 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"net/http"
 	"os"
 	"os/exec"
 	"strings"
@@ -23,30 +22,13 @@ const appRepo = "DemonLibe/ZapretAuto-"
 // appVersion подставляется при сборке: -ldflags "-X main.appVersion=v1.0.1".
 var appVersion = "dev"
 
-// latestAppVersion узнаёт тег последнего релиза по редиректу /releases/latest
-// (без GitHub API и его лимитов).
+// latestAppVersion — тег последнего релиза самого ZapretAuto.
 func latestAppVersion() (string, error) {
-	c := &http.Client{
-		Timeout: 30 * time.Second,
-		// Следуем редиректам (например, из-за регистра в имени репозитория), пока не дойдём до /tag/.
-		CheckRedirect: func(r *http.Request, via []*http.Request) error {
-			if strings.Contains(r.URL.Path, "/releases/tag/") || len(via) > 5 {
-				return http.ErrUseLastResponse
-			}
-			return nil
-		},
-	}
-	resp, err := c.Get("https://github.com/" + appRepo + "/releases/latest")
+	tag, err := latestReleaseTag(appRepo)
 	if err != nil {
 		return "", err
 	}
-	resp.Body.Close()
-	loc := resp.Header.Get("Location")
-	i := strings.LastIndex(loc, "/tag/")
-	if i < 0 {
-		return "", fmt.Errorf("релизов пока нет (HTTP %d)", resp.StatusCode)
-	}
-	return loc[i+len("/tag/"):], nil
+	return "v" + tag, nil
 }
 
 // selfUpdate скачивает новый ZapretAuto.exe, подменяет установленный и

@@ -48,9 +48,9 @@ func (handler) Execute(_ []string, r <-chan svc.ChangeRequest, s chan<- svc.Stat
 			}
 			return false, 0
 		case ctlUpdate:
-			eng.reqs <- reqUpdate
+			eng.request(reqUpdate)
 		case ctlSelect:
-			eng.reqs <- reqSelect
+			eng.request(reqSelect)
 		case ctlAutostartOn, ctlAutostartOff:
 			on := c.Cmd == ctlAutostartOn
 			go func() {

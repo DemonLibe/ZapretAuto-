@@ -37,6 +37,14 @@ type Engine struct {
 	started time.Time
 }
 
+// request ставит запрос в очередь, не блокируя обработчик службы (лишние повторы отбрасываются).
+func (e *Engine) request(r request) {
+	select {
+	case e.reqs <- r:
+	default:
+	}
+}
+
 func newEngine() *Engine {
 	return &Engine{reqs: make(chan request, 4)}
 }
@@ -66,7 +74,7 @@ func (e *Engine) Run(stop <-chan struct{}) {
 	}
 
 	// 2. Обновиться, если пора, затем запустить обход.
-	if time.Since(e.st.LastCheck) > time.Duration(e.cfg.UpdateIntervalHours)*time.Hour {
+	if e.updateDue() {
 		e.checkUpdate()
 	}
 	if e.cmd == nil {
@@ -75,7 +83,9 @@ func (e *Engine) Run(stop <-chan struct{}) {
 		}
 	}
 
-	updateTick := time.NewTicker(time.Duration(e.cfg.UpdateIntervalHours) * time.Hour)
+	// Раз в 15 минут смотрим, не пора ли проверить обновления. Сам интервал считаем по часам
+	// компьютера, а не таймером: таймер Windows не идёт, пока компьютер спит.
+	updateTick := time.NewTicker(15 * time.Minute)
 	defer updateTick.Stop()
 	healthEvery := time.Duration(e.cfg.HealthIntervalMinutes) * time.Minute
 	if healthEvery <= 0 {
@@ -109,7 +119,9 @@ func (e *Engine) Run(stop <-chan struct{}) {
 			}
 
 		case <-updateTick.C:
-			e.checkUpdate()
+			if e.updateDue() {
+				e.checkUpdate()
+			}
 
 		case <-healthTick.C:
 			if e.cmd == nil {
@@ -221,28 +233,38 @@ func (e *Engine) ensureRelease() bool {
 	}
 	logf("скачан zapret %s", ver)
 	e.st.Version = ver
-	e.st.LastCheck = time.Now()
+	e.st.LastCheck, e.st.CheckOK = time.Now().Round(0), true
+	e.st.CheckResult = "установлена последняя версия zapret " + ver
 	saveState(e.st)
 	return true
 }
 
 // checkUpdate — тихое обновление: скачать новую версию рядом, переключиться, старую оставить для отката.
+func (e *Engine) updateDue() bool {
+	return updateDue(e.st, time.Duration(e.cfg.UpdateIntervalHours)*time.Hour, time.Now())
+}
+
 func (e *Engine) checkUpdate() {
-	e.st.LastCheck = time.Now()
+	e.st.LastCheck, e.st.CheckOK = time.Now().Round(0), false
+	e.st.CheckResult = "проверяю…"
+	saveState(e.st)
 	defer saveState(e.st)
 
 	// Сначала — обновление самого ZapretAuto.exe (служба перезапустится сама).
 	if selfUpdate() {
+		e.st.CheckResult = "обновляю программу…"
 		return
 	}
 
 	latest, err := latestVersion(e.cfg.Repo)
 	if err != nil {
 		logf("проверка обновлений: %v", err)
+		e.st.CheckResult = "не удалось проверить — повторю через 15 минут"
 		return
 	}
 	if compareVersions(latest, e.st.Version) <= 0 {
 		logf("проверка обновлений: установлена последняя версия %s", e.st.Version)
+		e.st.CheckOK, e.st.CheckResult = true, "установлена последняя версия zapret "+e.st.Version
 		return
 	}
 	logf("найдена новая версия %s (текущая %s), скачиваю", latest, e.st.Version)
@@ -251,6 +273,7 @@ func (e *Engine) checkUpdate() {
 	}
 	if err := downloadRelease(e.cfg.Repo, latest); err != nil {
 		logf("обновление не удалось: %v", err)
+		e.st.CheckResult = "вышла версия " + latest + ", но скачать не удалось — повторю через 15 минут"
 		return
 	}
 	migrateUserFiles(e.root(), releaseDir(latest))
@@ -267,6 +290,7 @@ func (e *Engine) checkUpdate() {
 		e.startCurrent()
 	}
 	logf("обновлено до %s", latest)
+	e.st.CheckOK, e.st.CheckResult = true, "обновлено до zapret "+latest
 }
 
 func (e *Engine) currentStrategy() string {

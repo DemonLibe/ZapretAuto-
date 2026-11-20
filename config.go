@@ -57,6 +57,8 @@ type State struct {
 	Version     string    `json:"version"`      // установленная версия zapret
 	Strategy    string    `json:"strategy"`     // текущая стратегия (результат автоподбора)
 	LastCheck   time.Time `json:"last_check"`   // последняя проверка обновлений
+	CheckOK     bool      `json:"check_ok"`     // удалась ли последняя проверка
+	CheckResult string    `json:"check_result"` // итог последней проверки — показывается в окне
 	LastSelect  time.Time `json:"last_select"`  // последний автоподбор
 	PrevVersion string    `json:"prev_version"` // предыдущая версия — для отката
 	Status      string    `json:"status"`       // что служба делает сейчас (для окна программы); "" — работает
@@ -117,4 +119,15 @@ func saveJSON(path string, v any) {
 	if err := os.WriteFile(tmp, b, 0o644); err == nil {
 		_ = os.Rename(tmp, path)
 	}
+}
+
+// updateDue: пора ли проверять обновления — по расписанию или повторно через 15 минут после неудачи
+// (например, при включении компьютера интернет ещё не успел появиться). Сравниваем по часам
+// компьютера (Round(0) отбрасывает монотонное время): таймеры Windows не идут, пока компьютер спит.
+func updateDue(st State, interval time.Duration, now time.Time) bool {
+	since := now.Round(0).Sub(st.LastCheck.Round(0))
+	if !st.CheckOK {
+		return since > 15*time.Minute
+	}
+	return since > interval
 }

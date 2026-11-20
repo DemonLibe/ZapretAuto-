@@ -130,6 +130,20 @@ func stopServiceUser() error {
 	return err
 }
 
+// requestUpdateCheck просит работающую службу проверить обновления сейчас (без UAC).
+func requestUpdateCheck() error {
+	if !serviceRunning() {
+		return errors.New("обход выключен — включите его, и обновления проверятся автоматически")
+	}
+	h, done, err := openServiceAs(windows.SERVICE_USER_DEFINED_CONTROL)
+	if err != nil {
+		return err
+	}
+	defer done()
+	var st windows.SERVICE_STATUS
+	return windows.ControlService(h, uint32(ctlUpdate), &st)
+}
+
 // setAutostartUser: если служба работает — просит её саму сменить тип запуска (без UAC),
 // иначе меняет через UAC.
 func setAutostartUser(on bool) error {

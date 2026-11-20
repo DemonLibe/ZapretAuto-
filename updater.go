@@ -35,9 +35,36 @@ func httpGet(url string) (*http.Response, error) {
 	return resp, nil
 }
 
-// latestVersion берёт номер последней версии из того же файла, что и service.bat.
+var versionRe = regexp.MustCompile(`^[0-9][0-9A-Za-z.\-]*$`)
+
+// latestVersion узнаёт номер последней версии zapret. Источники по очереди, потому что
+// у части провайдеров raw.githubusercontent.com недоступен:
+//  1. .service/version.txt — тот же файл, что проверяет service.bat;
+//  2. редирект github.com/.../releases/latest на тег последнего релиза;
+//  3. тот же version.txt через зеркало jsDelivr.
 func latestVersion(repo string) (string, error) {
-	resp, err := httpGet("https://raw.githubusercontent.com/" + repo + "/main/.service/version.txt")
+	sources := []func() (string, error){
+		func() (string, error) {
+			return fetchVersionFile("https://raw.githubusercontent.com/" + repo + "/main/.service/version.txt")
+		},
+		func() (string, error) { return latestReleaseTag(repo) },
+		func() (string, error) {
+			return fetchVersionFile("https://cdn.jsdelivr.net/gh/" + repo + "@main/.service/version.txt")
+		},
+	}
+	var errs []string
+	for _, src := range sources {
+		v, err := src()
+		if err == nil {
+			return v, nil
+		}
+		errs = append(errs, err.Error())
+	}
+	return "", errors.New(strings.Join(errs, "; "))
+}
+
+func fetchVersionFile(url string) (string, error) {
+	resp, err := httpGet(url)
 	if err != nil {
 		return "", err
 	}
@@ -47,8 +74,37 @@ func latestVersion(repo string) (string, error) {
 		return "", err
 	}
 	v := strings.TrimSpace(string(b))
-	if !regexp.MustCompile(`^[0-9][0-9A-Za-z.\-]*$`).MatchString(v) {
-		return "", fmt.Errorf("странный ответ version.txt: %q", v)
+	if !versionRe.MatchString(v) {
+		return "", fmt.Errorf("%s: странный ответ %q", url, v)
+	}
+	return v, nil
+}
+
+// latestReleaseTag — тег последнего релиза по редиректу /releases/latest (без GitHub API и его лимитов).
+func latestReleaseTag(repo string) (string, error) {
+	c := &http.Client{
+		Timeout: 30 * time.Second,
+		CheckRedirect: func(r *http.Request, via []*http.Request) error {
+			if strings.Contains(r.URL.Path, "/releases/tag/") || len(via) > 5 {
+				return http.ErrUseLastResponse
+			}
+			return nil
+		},
+	}
+	url := "https://github.com/" + repo + "/releases/latest"
+	resp, err := c.Get(url)
+	if err != nil {
+		return "", err
+	}
+	resp.Body.Close()
+	loc := resp.Header.Get("Location")
+	i := strings.LastIndex(loc, "/tag/")
+	if i < 0 {
+		return "", fmt.Errorf("%s: нет тега (HTTP %d)", url, resp.StatusCode)
+	}
+	v := strings.TrimPrefix(loc[i+len("/tag/"):], "v")
+	if !versionRe.MatchString(v) {
+		return "", fmt.Errorf("%s: странный тег %q", url, v)
 	}
 	return v, nil
 }
